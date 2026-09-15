@@ -197,11 +197,24 @@ def headline_estimate(
       (b) ある時期に両群を非対称に揺らす全国的なショック
           → 県クラスタでは捉えられない。事前期間のプラセボ推定で実測する
 
-    (b) は (a) より1桁大きい。したがって報告する信頼区間は (b) を基準に置く。
-    p値は割当の無作為化に基づく並べ替え検定の結果を用いる。
+    (b) は (a) より1桁大きい。したがって報告する信頼区間もp値も (b) を基準に置く。
+
+    並べ替え検定のp値は採用しない。理由は2つある。
+      - 10,000回で1回も出なければ p = 1/10,001 が機械的に出るだけで、
+        「p = 0.0001」と等号で書ける精度の値ではない（下限値）
+      - あの検定が答えているのは「都道府県の分け方の偶然で説明できるか」だけで、
+        配信前の月に同じ検定をかけても同じ値が出る
+    参考値として perm_p に残す。
+
+    PPMLの県クラスタロバスト標準誤差も採用しない。サンドイッチ推定量として
+    正しく計算されてはいるが、測っているのは「県どうしがどれだけ違うか」であり、
+    「群全体がキャンペーン以外の理由でどれだけ動きうるか」ではない。
+    ロバストなのは不均一分散とクラスタ内相関に対してであって、
+    群×時点の共通ショックに対してではない。
     """
     placebo = placebo_time_test(panel, metric)
     perm = permutation_test(summary, weighted=True)
+    block = week_block_bootstrap(panel, metric)
 
     sd_log = float(placebo["placebo"]["beta"].std(ddof=1))
     z = 1.959963985
@@ -216,8 +229,14 @@ def headline_estimate(
         "ci_high_log": hi,
         "se_source": "事前期間プラセボ（群×時点ショックを含む）",
         "se_log": sd_log,
-        "p_value": perm["p_value"],
-        "p_source": f"並べ替え検定 {perm['n_permutations']:,}回（割当の無作為化）",
+        "p_value": block["p_value"],
+        "p_source": f"週ブロック・ブートストラップ {config.N_BOOTSTRAP:,}回"
+                    f"（実測以上 {block['n_as_extreme']}回）",
+        "perm_p": perm["p_value"],
+        "perm_note": f"並べ替え検定は p < {perm['p_value']:.4f}（{perm['n_permutations']:,}回で"
+                     f"{perm['n_as_extreme']}回。手続き上の下限値であり等号では書けない）",
+        "block_z": block["z"],
+        "block_ci_pct": (block["ci_low_pct"], block["ci_high_pct"]),
         "placebo_range_pct": (placebo["placebo_min_pct"], placebo["placebo_max_pct"]),
         "z_vs_placebo": placebo["z_vs_placebo"],
     }

@@ -89,10 +89,28 @@ def main() -> int:
     print(f"  観測されたリフト率 : {perm['observed_lift_pct']:+.3f}%")
     print(f"  帰無分布の範囲     : {null_lo:+.2f}% 〜 {null_hi:+.2f}%")
     print(f"  同等以上の差の回数 : {perm['n_as_extreme']} 回 / {perm['n_permutations']:,} 回")
-    print(f"  両側p値            : {perm['p_value']:.5f}")
+    print(f"  両側p値            : p < {perm['p_value']:.4f}")
+    print("  ※ 1回も出なければ (0+1)/(10,000+1) が機械的に出るだけで、等号では書けない下限値。")
+    print("  ※ この検定が答えるのは「県の分け方の偶然で説明できるか」のみ。配信前の月でも同じ値が出る。")
 
     # ---------------------------------------------------------------- 4. 誤差評価
     hr("4. 誤差評価：県クラスタだけでは足りない")
+    print("[PPMLの分散推定を指定別に比較]")
+    print("  PPMLは疑似最尤法なので素のMLE分散は無効。サンドイッチ型が必須。")
+    for label, kw in [
+        ("素のMLE分散（無効）", {}),
+        ("Huber-White (HC0)", {"cov_type": "HC0"}),
+        ("県クラスタ・サンドイッチ", {"cov_type": "cluster",
+                                      "cov_kwds": {"groups": panel["pref"].values}}),
+    ]:
+        import statsmodels.api as _sm, statsmodels.formula.api as _smf
+        _r = _smf.glm(f"{config.PRIMARY} ~ did + C(pref) + C(date)", data=panel,
+                      family=_sm.families.Poisson()).fit(**kw)
+        print(f"  {label:26s} SE {_r.bse['did']:.5f}  z {_r.params['did']/_r.bse['did']:6.1f}")
+    print("  点推定は3つとも同じ。クラスタSEが最も小さいのは、日次の撹乱が県内で打ち消し合うため。")
+    print("  つまりクラスタSEは「県どうしの違い」を正しく測っているが、")
+    print("  「群全体がキャンペーン以外の理由で動きうる幅」は測っていない。z=64はその帰結。\n")
+
     placebo = inference.placebo_time_test(panel)
     print("事前期間に「偽の配信期間（31日）」を置いて同じ推定を繰り返した結果：")
     print(f"  プラセボ窓数     : {placebo['n_windows']}")
@@ -118,8 +136,9 @@ def main() -> int:
           f"  95%信頼区間 [{inc['incremental_low']:+,.0f}, {inc['incremental_high']:+,.0f}] 件")
     print(f"  リフト率         : {head['lift_pct']:+.2f}%"
           f"  95%信頼区間 [{head['ci_low_pct']:+.2f}%, {head['ci_high_pct']:+.2f}%]")
-    print(f"  p値              : {head['p_value']:.5f}（{head['p_source']}）")
+    print(f"  p値              : {head['p_value']:.4f}（{head['p_source']}）")
     print(f"  誤差の出所       : {head['se_source']}")
+    print(f"  参考             : {head['perm_note']}")
 
     nat = effects.extrapolate_nationwide(panel, primary.beta)
     print(f"\n全国配信時の月間増分見込み : {nat['nationwide_incremental']:+,.0f} 件")
