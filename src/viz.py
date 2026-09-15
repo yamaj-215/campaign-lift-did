@@ -305,67 +305,77 @@ def plot_event_study(event_study: pd.DataFrame, headline: dict | None = None) ->
 # ------------------------------------------------------------------ 図3
 
 def plot_prefecture_dots(summary: pd.DataFrame, master: pd.DataFrame) -> Path:
-    """47都道府県の変化率を並べ、2群の分布が重なっていないことを示す。
+    """47都道府県の変化率を横に並べ、2群の分布が重なっていないことを示す。
 
-    「配信した県は全て非配信の県より伸びている」を一目で伝える図。
-    統計の説明を経ずに効果の存在を示せるため、報告資料の中心に置ける。
+    変化率の昇順に並べると非配信15県・配信32県がそのまま左右に分かれるので、
+    「配信した県はすべて配信しなかった県より伸びている」が一目で伝わる。
+
+    ただし分離していること自体は効果の証拠にならない（配信前の6月にも同じ分離が
+    起きる）。判定は図4のプラセボ比較で行うため、この図は提示用と位置づける。
     """
     df = summary.merge(master, on="pref", how="left").copy()
     df["chg"] = (df["ratio"] - 1) * 100
     df = df.sort_values("chg").reset_index(drop=True)
-    df["y"] = np.arange(len(df))
+    df["x"] = np.arange(len(df))
 
-    t = df[df.treat == 1]
     c = df[df.treat == 0]
-    boundary = (t.chg.min() + c.chg.max()) / 2
+    t = df[df.treat == 1]
+    boundary = (c["x"].max() + t["x"].min()) / 2
 
-    fig, ax = plt.subplots(figsize=(11.5, 12.5), dpi=200, facecolor=SURF)
-    fig.subplots_adjust(left=0.16, right=0.88, top=0.885, bottom=0.075)
-    _frame(ax, xgrid=True)
+    fig, ax = plt.subplots(figsize=(17, 8.6), dpi=200, facecolor=SURF)
+    fig.subplots_adjust(left=0.052, right=0.988, top=0.815, bottom=0.185)
+    _frame(ax)
 
-    ax.axhspan(-0.6, c.y.max() + 0.5, color=ORANGE, alpha=0.055, lw=0, zorder=0)
-    ax.axhspan(t.y.min() - 0.5, t.y.max() + 0.6, color=BLUE, alpha=0.055, lw=0, zorder=0)
+    ax.axvspan(-0.8, boundary, color=ORANGE, alpha=0.05, lw=0, zorder=0)
+    ax.axvspan(boundary, len(df) - 0.2, color=BLUE, alpha=0.05, lw=0, zorder=0)
+    ax.axhline(0, color=MUTED, lw=1.1, zorder=1)
 
     for grp, color, label in [(c, ORANGE, "非配信群（15県）"), (t, BLUE, "配信群（32県）")]:
-        ax.hlines(grp.y, 0, grp.chg, color=color, lw=1.6, alpha=0.45, zorder=2)
-        ax.plot(grp.chg, grp.y, "o", ms=9, color=color, mec=SURF, mew=1.4, zorder=4, label=label)
-        ax.axvline(grp.chg.mean(), color=color, lw=1.8, ls=(0, (5, 2.5)), zorder=3)
+        ax.vlines(grp["x"], 0, grp["chg"], color=color, lw=1.8, alpha=0.45, zorder=2)
+        ax.plot(grp["x"], grp["chg"], "o", ms=9, color=color, mec=SURF, mew=1.4,
+                zorder=4, label=label)
+        ax.hlines(grp["chg"].mean(), grp["x"].min() - 0.6, grp["x"].max() + 0.6,
+                  color=color, lw=2.2, ls=(0, (5, 2.5)), zorder=5)
 
-    ax.axvline(0, color=MUTED, lw=1.1, zorder=1)
-    ax.set_yticks(df.y)
-    ax.set_yticklabels(df.pref_ja, fontsize=9.5)
-    for tick, tr in zip(ax.get_yticklabels(), df.treat):
+    ax.axvline(boundary, color=VIOLET, lw=1.8, ls=(0, (4, 3)), zorder=6)
+
+    ax.set_xticks(df["x"])
+    ax.set_xticklabels(df["pref_ja"], fontsize=9.5, rotation=90)
+    for tick, tr in zip(ax.get_xticklabels(), df["treat"]):
         tick.set_color(BLUE if tr == 1 else ORANGE)
-    ax.set_ylim(-0.9, len(df) - 0.1)
-    ax.set_xlim(-0.4, 5.9)
-    ax.set_xlabel("事前期（5〜7月）に対する8月のエントリー数変化率（%）",
+    ax.set_xlim(-0.8, len(df) - 0.2)
+    ax.set_ylim(0, 5.9)
+    ax.set_ylabel("事前期（5〜7月）に対する8月の\nエントリー数変化率（%）",
                   fontsize=11.5, color=INK2, labelpad=9)
 
-    ax.axhline(c.y.max() + 0.5, color=VIOLET, lw=1.6, ls=(0, (4, 3)), zorder=5)
-    ax.text(5.75, c.y.max() + 0.5, "  分布の境界\n  重なり 0 組", fontsize=10.5, color=VIOLET,
-            va="center", ha="right", weight="bold", linespacing=1.5)
+    # 群平均とその差は、非配信群ブロックの上の空きスペースに置く
+    cm, tm = c["chg"].mean(), t["chg"].mean()
+    ax.text(c["x"].min() - 0.3, cm - 0.46, f"非配信群の平均 {cm:+.2f}%",
+            color=ORANGE, fontsize=11, weight="bold", va="top")
+    ax.text(t["x"].max() + 0.4, tm + 0.12, f"配信群の平均 {tm:+.2f}%",
+            color=BLUE, fontsize=11, weight="bold", ha="right")
+    x_arrow = 6.0
+    ax.annotate("", xy=(x_arrow, tm), xytext=(x_arrow, cm),
+                arrowprops=dict(arrowstyle="<->", color=VIOLET, lw=2.0))
+    ax.text(x_arrow + 0.5, (cm + tm) / 2, f"群平均の差\n{tm - cm:+.2f} pt",
+            color=VIOLET, fontsize=12, weight="bold", va="center", linespacing=1.5)
 
-    ax.text(c.chg.mean(), len(df) + 0.6, f"平均 {c.chg.mean():+.2f}%", color=ORANGE,
-            fontsize=10.5, weight="bold", ha="center")
-    ax.text(t.chg.mean(), len(df) + 0.6, f"平均 {t.chg.mean():+.2f}%", color=BLUE,
-            fontsize=10.5, weight="bold", ha="center")
-    # 群平均の差は、非配信群ブロックの空きスペースに置く（点や接続線と重ならない）
-    y_arrow = c.y.max() - 3.2
-    ax.annotate("", xy=(t.chg.mean(), y_arrow), xytext=(c.chg.mean(), y_arrow),
-                arrowprops=dict(arrowstyle="<->", color=VIOLET, lw=1.8))
-    ax.text((t.chg.mean() + c.chg.mean()) / 2, y_arrow + 0.75,
-            f"群平均の差 {t.chg.mean() - c.chg.mean():+.2f} pt", color=VIOLET, fontsize=11.5,
-            weight="bold", ha="center")
+    ax.annotate(f"境界　重なり 0 組\n非配信の最大 {c['chg'].max():+.2f}% ＜ 配信の最小 {t['chg'].min():+.2f}%",
+                xy=(boundary, 5.35), xytext=(boundary + 1.0, 5.55),
+                color=VIOLET, fontsize=10.5, weight="bold", va="top", linespacing=1.5,
+                arrowprops=dict(arrowstyle="-", color=VIOLET, lw=1, alpha=0.6))
 
-    ax.legend(loc="lower right", frameon=False, fontsize=11, labelcolor=INK,
-              handletextpad=0.6, borderpad=1.2)
+    ax.legend(loc="upper left", bbox_to_anchor=(0.0, 1.075), frameon=False, fontsize=11.5,
+              ncol=2, handletextpad=0.6, columnspacing=2.4, labelcolor=INK)
 
-    _title(fig, "都道府県別の変化率：2群の分布は完全に分離している",
-           f"配信32県は {t.chg.min():+.2f}% 〜 {t.chg.max():+.2f}%、"
-           f"非配信15県は {c.chg.min():+.2f}% 〜 {c.chg.max():+.2f}%", x=0.16, y=0.962)
-    fig.text(0.16, 0.022,
-             "各県の事前期日平均に対する8月日平均の変化率。破線は群平均。"
-             "配信県の最小値が非配信県の最大値を上回り、47県のうち重なる組み合わせは存在しない。",
+    _title(fig, "都道府県別の変化率：配信した32県はすべて、配信しなかった15県を上回った",
+           f"変化率の昇順に配列。配信32県 {t['chg'].min():+.2f}%〜{t['chg'].max():+.2f}%、"
+           f"非配信15県 {c['chg'].min():+.2f}%〜{c['chg'].max():+.2f}%",
+           x=0.052, y=0.955)
+    fig.text(0.052, 0.020,
+             "各点は県ごとの変化率（%）。県の事前期日平均に対する8月日平均の比。破線は群平均（県1票の単純平均。"
+             "規模加重でも配信群+3.69%／非配信群+0.85%でほぼ同じ）。"
+             "なお分離していること自体は効果の証拠にはならない（配信前の6月にも同様の分離が生じる）。判定は図4による。",
              fontsize=9, color=MUTED)
     return _save(fig, "fig3_prefecture_dots.png")
 
