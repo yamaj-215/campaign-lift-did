@@ -74,6 +74,14 @@ def load_raw() -> pd.DataFrame:
     return merged
 
 
+def load_master() -> pd.DataFrame:
+    """都道府県マスタ（ローマ字→漢字表記の対応）。作図のラベルに使う。"""
+    m = pd.read_csv(config.MASTER_CSV).rename(
+        columns={"roman": "pref", "prefecture_kanji": "pref_ja", "jiscode": "jiscode"}
+    )
+    return m[["pref", "pref_ja", "jiscode"]]
+
+
 def build_panel(raw: pd.DataFrame | None = None, by: list[str] | None = None) -> pd.DataFrame:
     """県×日（+任意の属性）のバランスドパネルを作る。0件セルは0で埋める。
 
