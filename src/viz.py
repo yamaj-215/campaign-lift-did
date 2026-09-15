@@ -580,6 +580,16 @@ def weekly_change(panel: pd.DataFrame, metric: str = config.PRIMARY) -> pd.DataF
     return out.reset_index()
 
 
+def _week_label(week: int) -> str:
+    """相対週の番号を、その週の開始日（M/D）に変換する。
+
+    週kは 配信開始日 + 7k 日から7日間。相対週の番号のままだと読み手が
+    日付に読み替えられないため、軸には開始日を出す。
+    """
+    start = pd.Timestamp(config.POST_START) + pd.Timedelta(days=7 * week)
+    return f"{start.month}/{start.day}"
+
+
 def plot_weekly_change(weekly: pd.DataFrame, master: pd.DataFrame) -> Path:
     """都道府県ごとの週次変化率の推移。
 
@@ -614,7 +624,7 @@ def plot_weekly_change(weekly: pd.DataFrame, master: pd.DataFrame) -> Path:
             ax.plot(weeks, df[df.treat == treat][cols].mean().to_numpy(float), color=color,
                     lw=2.8, zorder=5, marker="o", ms=7, mec=SURF, mew=1.3, label=label)
         ax.set_xticks(weeks)
-        ax.set_xticklabels([str(w) for w in weeks], fontsize=10)
+        ax.set_xticklabels([_week_label(w) for w in weeks], fontsize=9.5)
         ax.set_xlim(min(weeks) - 0.5, max(weeks) + 0.5)
         ax.set_ylabel(ylab, fontsize=11.5, color=INK2, labelpad=9)
         ax.set_title(title, fontsize=12.5, color=INK2, loc="left", pad=12)
@@ -647,23 +657,26 @@ def plot_weekly_change(weekly: pd.DataFrame, master: pd.DataFrame) -> Path:
         ax.annotate(f"{v:+.2f}", xy=(w, v), xytext=(0, dy), textcoords="offset points",
                     ha="center", fontsize=10, color=VIOLET, weight="bold")
     worst_i = int(np.argmax(gap[pre_mask]))
-    ax.annotate(f"週{int(weeks[pre_mask][worst_i])}（6/20〜6/26）{hi:+.2f}",
+    worst_w = int(weeks[pre_mask][worst_i])
+    worst_start = pd.Timestamp(config.POST_START) + pd.Timedelta(days=7 * worst_w)
+    ax.annotate(f"{worst_start:%-m/%-d}〜{worst_start + pd.Timedelta(days=6):%-m/%-d}  {hi:+.2f}",
                 xy=(weeks[pre_mask][worst_i], hi), xytext=(0, 13), textcoords="offset points",
                 ha="center", fontsize=10, color=INK2, weight="bold")
     ax.set_xticks(weeks)
-    ax.set_xticklabels([str(w) for w in weeks], fontsize=10)
+    ax.set_xticklabels([_week_label(int(w)) for w in weeks], fontsize=9.5)
     ax.set_xlim(weeks.min() - 0.5, weeks.max() + 0.5)
     ax.set_ylim(min(lo, gap.min()) - 1.0, max(hi, gap.max()) + 1.4)
     ax.set_ylabel("群平均の差（pt）", fontsize=11.5, color=INK2, labelpad=9)
-    ax.set_xlabel("配信開始を起点とした相対週（0 = 8/1〜8/7）", fontsize=11.5, color=INK2, labelpad=8)
+    ax.set_xlabel("週の開始日（各点はその日から7日間。8/1から配信開始）",
+                  fontsize=11.5, color=INK2, labelpad=8)
     ax.set_title(f"③ 群平均の差（配信群 − 非配信群）　帯＝配信前13週のレンジ {lo:+.2f} 〜 {hi:+.2f} pt",
                  fontsize=12.5, color=INK2, loc="left", pad=12)
 
     fig.text(0.792, 0.80,
              "読み取り\n\n"
-             f"・配信期間（週0〜3）の群差は\n　平均 {post_gap.mean():+.2f} pt。配信前13週の\n"
+             f"・配信期間（8/1〜8/28の4週）の群差は\n　平均 {post_gap.mean():+.2f} pt。配信前13週の\n"
              f"　レンジ（{lo:+.2f}〜{hi:+.2f} pt）の上端付近\n　かそれを超える水準にある\n\n"
-             f"・ただし配信前の週{int(weeks[pre_mask][worst_i])}（6/20〜6/26）\n"
+             f"・ただし配信前の {worst_start:%-m/%-d}〜{worst_start + pd.Timedelta(days=6):%-m/%-d} の週\n"
              f"　だけは {hi:+.2f} pt と配信期間と同水準。\n　単週で見れば区別がつかない\n\n"
              "・週次はノイズが大きく、単週では\n　判定できない。4週平均で見て\n　初めて差が意味を持つ\n\n"
              "・配信群のばらつきが大きいのは、\n　32県に小規模県を多く含むため\n"
@@ -672,7 +685,7 @@ def plot_weekly_change(weekly: pd.DataFrame, master: pd.DataFrame) -> Path:
              fontsize=10.5, color=INK2, va="top", linespacing=1.55)
 
     _title(fig, "都道府県別・週次変化率の推移",
-           "細線＝47都道府県それぞれ／太線＝群平均　週は配信開始日を起点とする7日刻み",
+           "細線＝47都道府県それぞれ／太線＝群平均　週は配信開始日（8/1）を起点とする7日刻み",
            x=0.068, y=0.972)
     fig.text(0.068, 0.014,
              "端の不完全な週（5/1の1日、8/29〜31の3日）は他の週と比較できないため除外している。",
