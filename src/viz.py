@@ -440,3 +440,109 @@ def plot_inference(permutation: dict, placebo: dict, headline: dict) -> Path:
              "誤差に数えられず、区間が実態の約7分の1に狭まるため。",
              fontsize=9, color=MUTED)
     return _save(fig, "fig4_inference.png")
+
+
+# ------------------------------------------------------------------ 図5
+
+def monthly_change(panel: pd.DataFrame, metric: str = config.PRIMARY) -> pd.DataFrame:
+    """都道府県 × 月の日平均、対前月変化率、5月を100とした指数を返す。
+
+    月によって日数が異なる（5月31日・6月30日・7月31日・8月31日）ため、
+    合計ではなく日平均で比較する。
+    """
+    df = panel.copy()
+    df["month"] = df["date"].dt.to_period("M")
+    wide = df.pivot_table(index=["pref", "treat"], columns="month", values=metric, aggfunc="mean")
+    months = list(wide.columns)
+
+    out = wide.copy()
+    out.columns = [str(m) for m in months]
+    cols = list(out.columns)
+    for prev, cur in zip(cols[:-1], cols[1:]):
+        out[f"mom_{cur}"] = (out[cur] / out[prev] - 1) * 100
+    for c in cols:
+        out[f"idx_{c}"] = out[c] / out[cols[0]] * 100
+    return out.reset_index()
+
+
+def plot_monthly_change(monthly: pd.DataFrame, master: pd.DataFrame) -> Path:
+    """都道府県ごとの月次変化率の推移。
+
+    左：対前月変化率。右：5月を100とした指数。
+    47本の細線が県、太線が群平均。群内のばらつきが小さく群間の差が大きいため、
+    「月ごとに群がまとまって上下する」構造がそのまま見える。
+    """
+    df = monthly.merge(master, on="pref", how="left")
+    mom_cols = [c for c in df.columns if c.startswith("mom_")]
+    idx_cols = [c for c in df.columns if c.startswith("idx_")]
+    mom_labels = [f"{int(c.split('-')[1])}月" for c in mom_cols]
+    idx_labels = [f"{int(c.split('-')[1])}月" for c in idx_cols]
+
+    fig, axes = plt.subplots(1, 2, figsize=(15, 7.6), dpi=200, facecolor=SURF,
+                             gridspec_kw={"width_ratios": [1, 1]})
+    fig.subplots_adjust(left=0.058, right=0.80, top=0.775, bottom=0.115, wspace=0.20)
+
+    for ax, cols, labels, title, ylab in [
+        (axes[0], mom_cols, mom_labels, "① 対前月変化率", "対前月変化率（%）"),
+        (axes[1], idx_cols, idx_labels, "② 5月を100とした指数", "指数（5月＝100）"),
+    ]:
+        _frame(ax)
+        x = np.arange(len(cols))
+        aug_i = len(cols) - 1
+        ax.axvspan(aug_i - 0.42, aug_i + 0.42, color=BLUE, alpha=0.07, lw=0, zorder=0)
+        ax.axhline(0 if cols is mom_cols else 100, color=MUTED, lw=1.1, zorder=1)
+
+        for treat, color in [(0, ORANGE), (1, BLUE)]:
+            sub = df[df.treat == treat]
+            for _, r in sub.iterrows():
+                ax.plot(x, r[cols].to_numpy(float), color=color, lw=0.9, alpha=0.30, zorder=2)
+        for treat, color, label in [(0, ORANGE, "非配信群（15県）"), (1, BLUE, "配信群（32県）")]:
+            sub = df[df.treat == treat]
+            ax.plot(x, sub[cols].mean().to_numpy(float), color=color, lw=3.2, zorder=5,
+                    marker="o", ms=9, mec=SURF, mew=1.6, label=label)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, fontsize=11.5)
+        ax.set_xlim(-0.45, len(cols) - 0.55)
+        ax.set_ylabel(ylab, fontsize=11.5, color=INK2, labelpad=9)
+        ax.set_title(title, fontsize=12.5, color=INK2, loc="left", pad=12)
+        ax.text(aug_i, ax.get_ylim()[1], "配信", ha="center", va="bottom",
+                fontsize=10.5, color=BLUE, weight="bold")
+
+    # 左パネル：月ごとの群平均の差を注記する
+    ax = axes[0]
+    x = np.arange(len(mom_cols))
+    mt = df[df.treat == 1][mom_cols].mean().to_numpy(float)
+    mc = df[df.treat == 0][mom_cols].mean().to_numpy(float)
+    for i, (a, b) in enumerate(zip(mt, mc)):
+        gap = a - b
+        ax.annotate("", xy=(i + 0.16, a), xytext=(i + 0.16, b),
+                    arrowprops=dict(arrowstyle="<->", color=VIOLET, lw=1.5))
+        ax.text(i + 0.23, (a + b) / 2, f"{gap:+.2f} pt", color=VIOLET, fontsize=10.5,
+                weight="bold", va="center")
+    ax.legend(loc="lower left", bbox_to_anchor=(0.0, 1.06), frameon=False, fontsize=11.5,
+              ncol=2, handlelength=2.0, columnspacing=2.2, labelcolor=INK)
+
+    gap_jun, gap_aug = mt[0] - mc[0], mt[-1] - mc[-1]
+    fig.text(0.815, 0.60,
+             "読み取り\n\n"
+             f"・8月の差 {gap_aug:+.2f} pt が本施策の効果\n\n"
+             f"・配信前の6月にも {gap_jun:+.2f} pt の差が\n"
+             "　生じており、7月は逆に縮んでいる\n\n"
+             "・群内の県は互いにほぼ同じ動きをする。\n"
+             "　月ごとに群単位でまとまって上下する\n"
+             "　構造があり、これが誤差の主要因\n\n"
+             "・したがって「分布が分離しているか」\n"
+             "　だけでは効果を判定できない。\n"
+             "　差の大きさを時系列の揺らぎと\n"
+             "　比べる必要がある",
+             fontsize=10.5, color=INK2, va="top", linespacing=1.55)
+
+    _title(fig, "都道府県別・月次変化率の推移",
+           "細線＝47都道府県それぞれ／太線＝群平均　月ごとの日平均で比較（月の日数差を調整）",
+           x=0.058, y=0.955)
+    fig.text(0.058, 0.022,
+             "各県の月次日平均エントリー数から算出。8月のみキャンペーン配信期間。"
+             "6月・7月の差は配信前に生じたもので、群×時点の共通ショックの大きさを示す。",
+             fontsize=9, color=MUTED)
+    return _save(fig, "fig5_monthly_change.png")
