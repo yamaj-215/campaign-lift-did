@@ -691,3 +691,108 @@ def plot_weekly_change(weekly: pd.DataFrame, master: pd.DataFrame) -> Path:
              "端の不完全な週（5/1の1日、8/29〜31の3日）は他の週と比較できないため除外している。",
              fontsize=9, color=MUTED)
     return _save(fig, "fig6_weekly_change.png")
+
+
+# ------------------------------------------------------------------ 図7
+
+def plot_segment_effects(segments: pd.DataFrame, overall: dict) -> Path:
+    """セグメント別効果のフォレストプロット。
+
+    誤差はセグメントごとに週ブロック・ブートストラップで測り直している。
+    全体の標準誤差を使い回すと、セグメントによって異なる群×時点ショックの
+    大きさを無視することになるため。
+
+    塗りつぶしはBH法でFDR調整後も有意なセグメントのみ。生のp値で色を付けると、
+    16回の探索的な比較から偶然の当たりを拾って報告することになる。
+    """
+    order = {"性別": 0, "年代": 1, "前職種": 2}
+    df = segments.copy()
+    df["_d"] = df["分類"].map(order)
+    df = df.sort_values(["_d", "リフト率%"], ascending=[True, True]).reset_index(drop=True)
+
+    # 分類ごとに見出し行ぶんの空きを入れる
+    ypos_by_idx, labels, ticks, tick_sig = {}, [], [], []
+    y = 0.0
+    headers = {}
+    # y軸は下から上に伸びるので、性別を最上段に置くには分類を逆順に積む
+    for d in sorted(df["_d"].unique(), reverse=True):
+        block = df[df["_d"] == d]
+        headers[list(order)[int(d)]] = y + len(block) + 0.35
+        for i, r in block.iterrows():
+            ypos_by_idx[i] = y
+            labels.append(r["セグメント"])
+            tick_sig.append(bool(r["有意(q<0.05)"]))
+            ticks.append(y)
+            y += 1
+        y += 1.6
+    df["y"] = df.index.map(ypos_by_idx)
+
+    fig, ax = plt.subplots(figsize=(13.5, 10.6), dpi=200, facecolor=SURF)
+    fig.subplots_adjust(left=0.165, right=0.635, top=0.855, bottom=0.075)
+    _frame(ax, xgrid=True)
+
+    ax.axvline(0, color=MUTED, lw=1.2, zorder=1)
+    ax.axvline(overall["lift_pct"], color=VIOLET, lw=1.6, ls=(0, (5, 2.5)), zorder=1)
+    ax.axvspan(overall["ci_low_pct"], overall["ci_high_pct"], color=VIOLET,
+               alpha=0.08, lw=0, zorder=0)
+
+    for _, r in df.iterrows():
+        sig = bool(r["有意(q<0.05)"])
+        color = BLUE if sig else MUTED
+        ax.plot([r["CI下限%"], r["CI上限%"]], [r["y"], r["y"]], color=color,
+                lw=2.2 if sig else 1.6, alpha=0.9 if sig else 0.6, solid_capstyle="round",
+                zorder=4)
+        ax.plot(r["リフト率%"], r["y"], "o", ms=11 if sig else 8,
+                mfc=color if sig else SURF, mec=color, mew=1.9, zorder=5)
+
+    ax.set_yticks(ticks)
+    ax.set_yticklabels(labels, fontsize=11)
+    for tick, sig in zip(ax.get_yticklabels(), tick_sig):
+        tick.set_color(INK if sig else INK2)
+        if sig:
+            tick.set_fontweight("bold")
+    ax.set_ylim(-1.0, y - 0.6)
+    ax.set_xlabel("リフト率（%）　誤差棒＝95%信頼区間（週ブロック・ブートストラップ）",
+                  fontsize=11.5, color=INK2, labelpad=9)
+
+    for name, hy in headers.items():
+        ax.text(-0.215, hy, name, transform=ax.get_yaxis_transform(), fontsize=12,
+                color=INK, weight="bold", va="center", ha="left")
+
+    x_lo, x_hi = df["CI下限%"].min() - 1.2, df["CI上限%"].max() + 1.0
+    ax.set_xlim(x_lo, x_hi)
+    ax.text(overall["lift_pct"], y - 1.0, f"全体 {overall['lift_pct']:+.2f}%",
+            color=VIOLET, fontsize=10.5, weight="bold", ha="center")
+
+    # 右側に構成比と増分件数を並べる
+    tx = 1.04
+    ax.text(tx, y - 1.0, "8月構成比", transform=ax.get_yaxis_transform(), fontsize=10,
+            color=INK2, ha="left", va="center")
+    ax.text(tx + 0.13, y - 1.0, "増分件数", transform=ax.get_yaxis_transform(), fontsize=10,
+            color=INK2, ha="left", va="center")
+    for _, r in df.iterrows():
+        sig = bool(r["有意(q<0.05)"])
+        ax.text(tx, r["y"], f"{r['8月構成比%']:.1f}%", transform=ax.get_yaxis_transform(),
+                fontsize=10, color=INK2, ha="left", va="center")
+        ax.text(tx + 0.13, r["y"], f"{r['増分件数']:+,.0f}", transform=ax.get_yaxis_transform(),
+                fontsize=10.5, color=INK if sig else INK2,
+                weight="bold" if sig else "normal", ha="left", va="center")
+
+    fig.text(0.775, 0.52,
+             "読み取り\n\n"
+             "・塗りつぶし＝多重比較調整後も\n　0と区別できるセグメント\n"
+             "　（BH法のq値 < 0.05）\n\n"
+             "・16セグメントのうち残るのは\n　女性と40歳代の2つだけ。\n"
+             "　他は方向は揃うが誤差に埋もれる\n\n"
+             "・50歳代と医療・福祉はほぼ0。\n　全セグメント一様ではない\n\n"
+             "・各次元の増分件数の合計は\n　いずれも全体の+726件と一致する\n\n"
+             "・事前登録のない探索的分析。\n　確定的な結論とはしない",
+             fontsize=10.5, color=INK2, va="center", linespacing=1.55)
+
+    _title(fig, "セグメント別の効果",
+           "属性ごとにDIDを推定し、誤差もセグメントごとに測り直したもの", x=0.165, y=0.955)
+    fig.text(0.165, 0.020,
+             "紫の破線と帯は全体の推定値と95%信頼区間。誤差棒はセグメントごとの"
+             "週ブロック・ブートストラップによる95%信頼区間。",
+             fontsize=9, color=MUTED)
+    return _save(fig, "fig7_segment_effects.png")

@@ -316,3 +316,91 @@ def check_fe_redundancy(panel: pd.DataFrame, metric: str = config.PRIMARY,
         "abs_diff": abs(closed_form - ppml),
         "matches": abs(closed_form - ppml) < tol,
     }
+
+
+# ---------------------------------------------------------------- セグメント別
+
+SEGMENT_DIMENSIONS = {"gender": "性別", "age": "年代", "job": "前職種"}
+
+
+def segment_effects(
+    raw: pd.DataFrame,
+    dimensions: list[str] | None = None,
+    metric: str = config.PRIMARY,
+) -> pd.DataFrame:
+    """属性セグメントごとにDIDを推定する。
+
+    誤差は全体と同じ週ブロック・ブートストラップで評価する。
+    セグメントによって群×時点の共通ショックの大きさが違うため、
+    全体の標準誤差を使い回さず、セグメントごとに測り直す必要がある。
+
+    これは事前に設計されたサブ分析ではなく探索的な多重比較なので、
+    p値はBH法でFDRを調整したq値を併記する。確定的な結論としない。
+    """
+    from src import data_prep, inference  # 循環参照を避けるため関数内で読む
+
+    dimensions = dimensions or list(SEGMENT_DIMENSIONS)
+    rows = []
+    for dim in dimensions:
+        panel = data_prep.build_panel(raw, by=[dim])
+        post_total = panel.loc[panel.post == 1, metric].sum()
+        for level, sub in panel.groupby(dim, observed=True):
+            boot = inference.week_block_bootstrap(sub, metric)
+            actual = float(sub.loc[(sub.treat == 1) & (sub.post == 1), metric].sum())
+            rows.append({
+                "分類": SEGMENT_DIMENSIONS.get(dim, dim),
+                "dimension": dim,
+                "セグメント": level,
+                "リフト率%": boot["lift_pct"],
+                "CI下限%": boot["ci_low_pct"],
+                "CI上限%": boot["ci_high_pct"],
+                "se_pct": boot["se_pct"],
+                "z": boot["z"],
+                "p値": boot["p_value"],
+                "beta": boot["beta"],
+                "配信群8月実績": actual,
+                "増分件数": actual * (1 - np.exp(-boot["beta"])),
+                "8月構成比%": panel.loc[(panel.post == 1) & (panel[dim] == level), metric].sum()
+                / post_total * 100,
+            })
+
+    out = pd.DataFrame(rows)
+    # 全セグメントをまとめてFDR調整する（次元ごとではなく、探索の総数で調整）
+    out["q値(BH)"] = inference.benjamini_hochberg(out["p値"].to_numpy())
+    out["有意(q<0.05)"] = out["q値(BH)"] < config.ALPHA
+    return out
+
+
+def segment_cross_effects(
+    raw: pd.DataFrame,
+    dimensions: tuple[str, str] = ("gender", "age"),
+    metric: str = config.PRIMARY,
+    n_boot: int = 4000,
+) -> pd.DataFrame:
+    """2軸を掛け合わせたセグメントのDID（補助分析）。
+
+    単一軸の結果が別の軸との交絡で生じていないかを確かめる用途。
+    セル数が増えるぶん1セルあたりの件数が減って誤差が広がるので、
+    方向の確認にとどめ、個々のセルを結論には使わない。
+    """
+    from src import data_prep, inference
+
+    dims = list(dimensions)
+    panel = data_prep.build_panel(raw, by=dims)
+    rows = []
+    for key, sub in panel.groupby(dims, observed=True):
+        boot = inference.week_block_bootstrap(sub, metric, n_boot=n_boot)
+        row = {SEGMENT_DIMENSIONS.get(d, d): k for d, k in zip(dims, key)}
+        row.update({
+            "リフト率%": boot["lift_pct"],
+            "CI下限%": boot["ci_low_pct"],
+            "CI上限%": boot["ci_high_pct"],
+            "z": boot["z"],
+            "p値": boot["p_value"],
+            "配信群8月実績": float(sub.loc[(sub.treat == 1) & (sub.post == 1), metric].sum()),
+        })
+        rows.append(row)
+
+    out = pd.DataFrame(rows)
+    out["q値(BH)"] = inference.benjamini_hochberg(out["p値"].to_numpy())
+    return out.sort_values("リフト率%", ascending=False).reset_index(drop=True)

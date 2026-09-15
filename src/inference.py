@@ -221,3 +221,96 @@ def headline_estimate(
         "placebo_range_pct": (placebo["placebo_min_pct"], placebo["placebo_max_pct"]),
         "z_vs_placebo": placebo["z_vs_placebo"],
     }
+
+
+def _daily_group_series(panel: pd.DataFrame, metric: str = config.PRIMARY) -> pd.DataFrame:
+    """日付 × 群 の合計系列。検定の入力をこの形に揃える。"""
+    return (
+        panel.pivot_table(index="date", columns="treat", values=metric, aggfunc="sum")
+        .rename(columns={0: "control", 1: "treat"})
+        .sort_index()
+    )
+
+
+def _did_from_daily(pre: pd.DataFrame, post: pd.DataFrame) -> float:
+    return float(
+        (np.log(post["treat"].mean()) - np.log(pre["treat"].mean()))
+        - (np.log(post["control"].mean()) - np.log(pre["control"].mean()))
+    )
+
+
+def week_block_bootstrap(
+    panel: pd.DataFrame,
+    metric: str = config.PRIMARY,
+    n_boot: int = config.N_BOOTSTRAP,
+    seed: int = config.SEED,
+) -> dict:
+    """事前期間の週を復元抽出して帰無分布を作る。本分析で最も保守的な誤差評価。
+
+    群差は週単位でまとまって上下し、翌週には持ち越さない（週次の自己相関はほぼ0）。
+    そこで「週」をブロックとして扱い、事前期間の完全週から
+    「配信期間ぶん」と「ベースラインぶん」を組み直して同じ推定を繰り返す。
+    介入がない材料だけで作るので、得られた分布は帰無分布そのものになる。
+
+    県クラスタロバスト標準誤差は、この週単位の共通変動を誤差に数えないため
+    区間が1桁狭く出る。こちらを採用する。
+    """
+    daily = _daily_group_series(panel, metric)
+    pre = daily.loc[: pd.Timestamp(config.PRE_END)]
+    post = daily.loc[pd.Timestamp(config.POST_START) :]
+    observed = _did_from_daily(pre, post)
+
+    # 週の切り方は配信開始日を起点に揃える（カレンダー週だと8/1をまたぐ週が混ざる）
+    offset = (pre.index - pd.Timestamp(config.POST_START)).days
+    blocks = [g for _, g in pre.groupby(np.floor(offset / 7).astype(int)) if len(g) == 7]
+
+    # 実際の期間長を週数に丸める。31日→4週、92日→13週。
+    # 丸めで短くなる分だけ誤差はやや大きめに出るが、保守側なので許容する。
+    n_post_blocks = max(1, round(len(post) / 7))
+    n_pre_blocks = max(1, round(len(pre) / 7))
+
+    rng = np.random.default_rng(seed)
+    draws = np.empty(n_boot)
+    for i in range(n_boot):
+        pick = rng.integers(0, len(blocks), n_post_blocks + n_pre_blocks)
+        fake_post = pd.concat([blocks[j] for j in pick[:n_post_blocks]])
+        fake_pre = pd.concat([blocks[j] for j in pick[n_post_blocks:]])
+        draws[i] = _did_from_daily(fake_pre, fake_post)
+
+    sd = float(draws.std(ddof=1))
+    z = 1.959963985
+    n_extreme = int((np.abs(draws) >= abs(observed)).sum())
+    return {
+        "beta": observed,
+        "lift_pct": (np.exp(observed) - 1) * 100,
+        "se_log": sd,
+        "se_pct": (np.exp(sd) - 1) * 100,
+        "ci_low_log": observed - z * sd,
+        "ci_high_log": observed + z * sd,
+        "ci_low_pct": (np.exp(observed - z * sd) - 1) * 100,
+        "ci_high_pct": (np.exp(observed + z * sd) - 1) * 100,
+        "z": observed / sd if sd > 0 else np.nan,
+        "p_value": (n_extreme + 1) / (n_boot + 1),
+        "n_as_extreme": n_extreme,
+        "n_blocks": len(blocks),
+        "n_post_blocks": n_post_blocks,
+        "n_pre_blocks": n_pre_blocks,
+        "draws": draws,
+    }
+
+
+def benjamini_hochberg(pvalues: np.ndarray, alpha: float = config.ALPHA) -> np.ndarray:
+    """BH法でFDRを調整したq値を返す。
+
+    セグメント別分析は事前登録のない探索的な多重比較なので、
+    生のp値をそのまま「有意」と読むと偶然の当たりを拾う。
+    """
+    p = np.asarray(pvalues, dtype=float)
+    n = len(p)
+    order = np.argsort(p)
+    ranked = p[order] * n / (np.arange(n) + 1)
+    # 単調性を保つため後ろから累積最小を取る
+    ranked = np.minimum.accumulate(ranked[::-1])[::-1]
+    q = np.empty(n)
+    q[order] = np.clip(ranked, 0, 1)
+    return q

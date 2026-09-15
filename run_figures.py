@@ -28,12 +28,16 @@ def main() -> int:
     head = inference.headline_estimate(panel, summary, beta)
     monthly = viz.monthly_change(panel)
     weekly = viz.weekly_change(panel)
+    raw = data_prep.load_raw()
+    segments = models.segment_effects(raw)
+    block = inference.week_block_bootstrap(panel)
 
     config.TABLES.mkdir(parents=True, exist_ok=True)
     monthly.merge(master, on="pref", how="left").to_csv(
         config.TABLES / "monthly_change.csv", index=False, encoding="utf-8-sig")
     weekly.merge(master, on="pref", how="left").to_csv(
         config.TABLES / "weekly_change.csv", index=False, encoding="utf-8-sig")
+    segments.to_csv(config.TABLES / "segment_effects.csv", index=False, encoding="utf-8-sig")
 
     paths = [
         viz.plot_trend(panel),
@@ -42,6 +46,7 @@ def main() -> int:
         viz.plot_inference(perm, placebo, head),
         viz.plot_monthly_change(monthly, master),
         viz.plot_weekly_change(weekly, master),
+        viz.plot_segment_effects(segments, block),
     ]
     for p in paths:
         print(f"saved: {p}")

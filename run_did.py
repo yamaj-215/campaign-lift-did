@@ -165,8 +165,32 @@ def main() -> int:
     print(f"\n配信前の効果 : 平均 {full_pre.lift_pct.mean():+.3f}%（完全週のみ）")
     print(f"配信後の効果 : 平均 {es[es.is_post].lift_pct.mean():+.3f}%")
 
-    # ---------------------------------------------------------------- 8. CPA
-    hr("8. 増分CPA感度分析（消化金額が未受領のため算定式のみ提示）")
+    # ---------------------------------------------------------------- 8. セグメント別
+    hr("8. セグメント別の効果（探索的）")
+    seg = models.segment_effects(raw)
+    seg.to_csv(config.TABLES / "segment_effects.csv", index=False, encoding="utf-8-sig")
+    print(
+        seg.sort_values(["分類", "リフト率%"], ascending=[True, False])
+        [["分類", "セグメント", "8月構成比%", "リフト率%", "CI下限%", "CI上限%",
+          "z", "p値", "q値(BH)", "有意(q<0.05)", "増分件数"]]
+        .round({"8月構成比%": 1, "リフト率%": 2, "CI下限%": 2, "CI上限%": 2,
+                "z": 2, "p値": 4, "q値(BH)": 4, "増分件数": 0})
+        .to_string(index=False)
+    )
+    print("\n誤差はセグメントごとに週ブロック・ブートストラップで測り直している。")
+    print("16回の探索的な比較なので、BH法でFDRを調整したq値で判定する。")
+    print(f"調整後も0と区別できるのは {int(seg['有意(q<0.05)'].sum())} セグメント。")
+    print("\n各次元の増分件数の合計（全体+726件と一致するはず）:")
+    print(seg.groupby("分類")["増分件数"].sum().round(0).to_string())
+
+    cross = models.segment_cross_effects(raw)
+    cross.to_csv(config.TABLES / "segment_cross_effects.csv", index=False, encoding="utf-8-sig")
+    print("\n[補助] 性別 × 年代")
+    print(cross.round({"リフト率%": 2, "CI下限%": 2, "CI上限%": 2, "z": 2,
+                       "p値": 4, "q値(BH)": 4, "配信群8月実績": 0}).to_string(index=False))
+
+    # ---------------------------------------------------------------- 9. CPA
+    hr("9. 増分CPA感度分析（消化金額が未受領のため算定式のみ提示）")
     print("増分CPA = 消化金額 ÷ 増分エントリー数\n")
     print(effects.cpa_table(inc["incremental"]).to_string(index=False))
 
