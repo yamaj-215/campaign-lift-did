@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# 生成物（run_did.py を実行すれば再現できる）
+output/tables/*
+!output/tables/.gitkeep
+output/figures/*
+!output/figures/.gitkeep
