@@ -27,10 +27,13 @@ def main() -> int:
     placebo = inference.placebo_time_test(panel)
     head = inference.headline_estimate(panel, summary, beta)
     monthly = viz.monthly_change(panel)
+    weekly = viz.weekly_change(panel)
 
     config.TABLES.mkdir(parents=True, exist_ok=True)
     monthly.merge(master, on="pref", how="left").to_csv(
         config.TABLES / "monthly_change.csv", index=False, encoding="utf-8-sig")
+    weekly.merge(master, on="pref", how="left").to_csv(
+        config.TABLES / "weekly_change.csv", index=False, encoding="utf-8-sig")
 
     paths = [
         viz.plot_trend(panel),
@@ -38,6 +41,7 @@ def main() -> int:
         viz.plot_prefecture_dots(summary, master),
         viz.plot_inference(perm, placebo, head),
         viz.plot_monthly_change(monthly, master),
+        viz.plot_weekly_change(weekly, master),
     ]
     for p in paths:
         print(f"saved: {p}")

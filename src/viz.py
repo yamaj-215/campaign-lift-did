@@ -546,3 +546,135 @@ def plot_monthly_change(monthly: pd.DataFrame, master: pd.DataFrame) -> Path:
              "6月・7月の差は配信前に生じたもので、群×時点の共通ショックの大きさを示す。",
              fontsize=9, color=MUTED)
     return _save(fig, "fig5_monthly_change.png")
+
+
+# ------------------------------------------------------------------ 図6
+
+def weekly_change(panel: pd.DataFrame, metric: str = config.PRIMARY) -> pd.DataFrame:
+    """都道府県 × 相対週の日平均、対前週変化率、事前期平均=100の指数を返す。
+
+    週は配信開始日を起点とする7日刻み（models.add_event_time）。カレンダー週だと
+    8/1をまたぐ週に事前期と配信期の日が混在するため、そちらは使わない。
+    7日に満たない端の週（5/1の1日、8/29-31の3日）は他の週と比較できないので除く。
+    """
+    from src import models  # 循環参照を避けるため関数内で読む
+
+    df = models.add_event_time(panel)
+    days = df.groupby("event_week")["date"].nunique()
+    full_weeks = sorted(days[days == 7].index)
+
+    wide = df.pivot_table(index=["pref", "treat"], columns="event_week",
+                          values=metric, aggfunc="mean")[full_weeks]
+    pre_weeks = [w for w in full_weeks if w < 0]
+
+    out = wide.copy()
+    out.columns = [f"w{w}" for w in full_weeks]
+    base = wide[pre_weeks].mean(axis=1)
+
+    for prev, cur in zip(full_weeks[:-1], full_weeks[1:]):
+        out[f"wow_{cur}"] = (wide[cur] / wide[prev] - 1) * 100
+    for w in full_weeks:
+        out[f"idx_{w}"] = wide[w] / base * 100
+
+    out.attrs["full_weeks"] = full_weeks
+    return out.reset_index()
+
+
+def plot_weekly_change(weekly: pd.DataFrame, master: pd.DataFrame) -> Path:
+    """都道府県ごとの週次変化率の推移。
+
+    ①対前週変化率　②事前期平均=100の指数　③群平均の差
+    細線が47県、太線が群平均。③には配信前13週のレンジを帯で重ね、
+    配信期間の群差がその外に出ているかを目で確かめられるようにする。
+    """
+    df = weekly.merge(master, on="pref", how="left")
+    wow_cols = sorted([c for c in df.columns if c.startswith("wow_")],
+                      key=lambda c: int(c.split("_")[1]))
+    idx_cols = sorted([c for c in df.columns if c.startswith("idx_")],
+                      key=lambda c: int(c.split("_")[1]))
+    wow_weeks = [int(c.split("_")[1]) for c in wow_cols]
+    idx_weeks = [int(c.split("_")[1]) for c in idx_cols]
+
+    fig, axes = plt.subplots(3, 1, figsize=(14.5, 13.0), dpi=200, facecolor=SURF,
+                             gridspec_kw={"height_ratios": [1, 1, 0.8]})
+    fig.subplots_adjust(left=0.068, right=0.775, top=0.855, bottom=0.062, hspace=0.34)
+
+    for ax, cols, weeks, base_line, title, ylab in [
+        (axes[0], wow_cols, wow_weeks, 0.0, "① 対前週変化率", "対前週変化率（%）"),
+        (axes[1], idx_cols, idx_weeks, 100.0, "② 事前期平均を100とした指数", "指数（事前期平均＝100）"),
+    ]:
+        _frame(ax)
+        ax.axvspan(-0.5, max(weeks) + 0.5, color=BLUE, alpha=0.06, lw=0, zorder=0)
+        ax.axvline(-0.5, color=BLUE, lw=1.4, ls=(0, (4, 3)), alpha=0.7, zorder=2)
+        ax.axhline(base_line, color=MUTED, lw=1.1, zorder=1)
+        for treat, color in [(0, ORANGE), (1, BLUE)]:
+            for _, r in df[df.treat == treat].iterrows():
+                ax.plot(weeks, r[cols].to_numpy(float), color=color, lw=0.8, alpha=0.28, zorder=2)
+        for treat, color, label in [(0, ORANGE, "非配信群（15県）"), (1, BLUE, "配信群（32県）")]:
+            ax.plot(weeks, df[df.treat == treat][cols].mean().to_numpy(float), color=color,
+                    lw=2.8, zorder=5, marker="o", ms=7, mec=SURF, mew=1.3, label=label)
+        ax.set_xticks(weeks)
+        ax.set_xticklabels([str(w) for w in weeks], fontsize=10)
+        ax.set_xlim(min(weeks) - 0.5, max(weeks) + 0.5)
+        ax.set_ylabel(ylab, fontsize=11.5, color=INK2, labelpad=9)
+        ax.set_title(title, fontsize=12.5, color=INK2, loc="left", pad=12)
+
+    axes[0].legend(loc="lower left", bbox_to_anchor=(0.0, 1.10), frameon=False, fontsize=11.5,
+                   ncol=2, handlelength=2.0, columnspacing=2.4, labelcolor=INK)
+
+    # --- ③ 群平均の差 ---
+    ax = axes[2]
+    _frame(ax)
+    gap = (df[df.treat == 1][idx_cols].mean() - df[df.treat == 0][idx_cols].mean()).to_numpy(float)
+    weeks = np.array(idx_weeks)
+    pre_mask = weeks < 0
+    lo, hi = gap[pre_mask].min(), gap[pre_mask].max()
+    post_gap = gap[~pre_mask]
+
+    ax.axvspan(-0.5, weeks.max() + 0.5, color=BLUE, alpha=0.06, lw=0, zorder=0)
+    ax.axhspan(lo, hi, color=VIOLET, alpha=0.11, lw=0, zorder=0)
+    ax.axhline(0, color=MUTED, lw=1.1, zorder=1)
+    ax.axvline(-0.5, color=BLUE, lw=1.4, ls=(0, (4, 3)), alpha=0.7, zorder=2)
+    ax.plot(weeks[pre_mask], gap[pre_mask], color=MUTED, lw=2.0, marker="o", ms=7,
+            mec=SURF, mew=1.3, zorder=5)
+    ax.plot(weeks[~pre_mask], gap[~pre_mask], color=VIOLET, lw=2.8, marker="o", ms=9,
+            mec=SURF, mew=1.4, zorder=6)
+    ax.hlines(post_gap.mean(), -0.5, weeks.max() + 0.5, color=VIOLET, lw=1.8,
+              ls=(0, (5, 2.5)), zorder=6)
+    for w, v in zip(weeks[~pre_mask], post_gap):
+        # 週0は他の配信週より低く、上に置くと線と重なるため下に逃がす
+        dy = -22 if v < post_gap.mean() - 0.5 else 13
+        ax.annotate(f"{v:+.2f}", xy=(w, v), xytext=(0, dy), textcoords="offset points",
+                    ha="center", fontsize=10, color=VIOLET, weight="bold")
+    worst_i = int(np.argmax(gap[pre_mask]))
+    ax.annotate(f"週{int(weeks[pre_mask][worst_i])}（6/20〜6/26）{hi:+.2f}",
+                xy=(weeks[pre_mask][worst_i], hi), xytext=(0, 13), textcoords="offset points",
+                ha="center", fontsize=10, color=INK2, weight="bold")
+    ax.set_xticks(weeks)
+    ax.set_xticklabels([str(w) for w in weeks], fontsize=10)
+    ax.set_xlim(weeks.min() - 0.5, weeks.max() + 0.5)
+    ax.set_ylim(min(lo, gap.min()) - 1.0, max(hi, gap.max()) + 1.4)
+    ax.set_ylabel("群平均の差（pt）", fontsize=11.5, color=INK2, labelpad=9)
+    ax.set_xlabel("配信開始を起点とした相対週（0 = 8/1〜8/7）", fontsize=11.5, color=INK2, labelpad=8)
+    ax.set_title(f"③ 群平均の差（配信群 − 非配信群）　帯＝配信前13週のレンジ {lo:+.2f} 〜 {hi:+.2f} pt",
+                 fontsize=12.5, color=INK2, loc="left", pad=12)
+
+    fig.text(0.792, 0.80,
+             "読み取り\n\n"
+             f"・配信期間（週0〜3）の群差は\n　平均 {post_gap.mean():+.2f} pt。配信前13週の\n"
+             f"　レンジ（{lo:+.2f}〜{hi:+.2f} pt）の上端付近\n　かそれを超える水準にある\n\n"
+             f"・ただし配信前の週{int(weeks[pre_mask][worst_i])}（6/20〜6/26）\n"
+             f"　だけは {hi:+.2f} pt と配信期間と同水準。\n　単週で見れば区別がつかない\n\n"
+             "・週次はノイズが大きく、単週では\n　判定できない。4週平均で見て\n　初めて差が意味を持つ\n\n"
+             "・配信群のばらつきが大きいのは、\n　32県に小規模県を多く含むため\n"
+             "　（群内sd 配信群 1.0前後／\n　非配信群 0.3前後）\n\n"
+             "・①は週ごとの上下が大きく両群が\n　ほぼ重なる。効果は②③のように\n　水準で見ないと現れない",
+             fontsize=10.5, color=INK2, va="top", linespacing=1.55)
+
+    _title(fig, "都道府県別・週次変化率の推移",
+           "細線＝47都道府県それぞれ／太線＝群平均　週は配信開始日を起点とする7日刻み",
+           x=0.068, y=0.972)
+    fig.text(0.068, 0.014,
+             "端の不完全な週（5/1の1日、8/29〜31の3日）は他の週と比較できないため除外している。",
+             fontsize=9, color=MUTED)
+    return _save(fig, "fig6_weekly_change.png")
